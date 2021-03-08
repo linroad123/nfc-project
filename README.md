@@ -43,7 +43,7 @@ The NXP MIFARE Ultralight C smart card, which contains 192 bytes of memory divid
     <tr>
       <td>3</td>
       <td>03h</td>
-      <td th colspan="4">a one-time programmable page (OTP)</td>
+      <td th colspan="4">a one-time programmable page (OTP) MAX_RIDE</td>
     </tr> 
     <tr>
       <td>4</td>
@@ -109,6 +109,10 @@ The NXP MIFARE Ultralight C smart card, which contains 192 bytes of memory divid
     </tr>
   </tbody>
 </table>
+• Byte 0 9 : read only
+
+• Byte 10 15: One time programmable (OTP) bytes; Once a bit in an OTP byte is set, it cannot be reset
+back.
 
 * Page 3 
 
@@ -163,6 +167,12 @@ The version number field will be helpful later when you update the data-structur
 
 To prevent the large-scale security failure caused by breaking of one card, it is better to use a different secret key for each card. This is done by **computing the diversified (i.e. per-card) key as K = h(master secret | UID)** where h is a cryptographic hash function, UID is the unique 7-byte identifier of the card, and the master secret is stored only on the reader side (preferably in a physical security module or in an online server).
 
+Now, the attacker might still be able to extract the diversified key from the card and produce many copies of the card, but once the fraud is detected, the cloned or hacked cards can be blacklisted by the UID. For this to work, it is essential to monitor for situations where the same UID appears more often in event logs or moves faster in the geographic area than a real transport user would. System designers should include key diversification and event logging into the system design from the beginning, while misuse detection can be added later.
+
+Sometimes it is better to write an application-specific ticket identifier on the card and use it for event logging and key diversification instead of the smart-card UID. In fact, this is the safe design option because most modern systems will eventually allow other media, such as mobile devices with a secure hardware module, to be used instead of the original type of smart card.
+
+As a side note, any event logging on the backend needs to consider privacy regulation, such as GDPR. At minimum, there needs to be a way to delete old logs after some defined period, when they are no longer needed.
+
 * Message authentication code (MAC) on ticket data
 
 To prevent the MitM attacks on the Ultralight family cards, you can **compute a message authentication code (MAC) over the ticket data on the card, including the card UID, and write the MAC to the card.** The reader should then verify the MAC when reading the ticket data. This prevents arbitrary modifications to the card data by the MitM attacker. Instead of including the UID into the MAC input, you can also compute the MAC with a diversified key.
@@ -170,6 +180,12 @@ To prevent the MitM attacks on the Ultralight family cards, you can **compute a 
 The MAC does not need to be very long. If the attacker tries to create a correct MAC by brute-force guessing, it will need to tap the physical card reader after each guessed value to find out of the guess is correct. Depending on the application, **just 4 bytes of MAC may be sufficient:** the attacker will have to tap the reader 2^31 times, on the average, in order to make one malicious change to the card contents.Moreover, if the MAC is bound to the card UID, the produced false content cannot be reused on other cards, with makes such brute-force trials pointless for the attacker. In high-value applications (such as key cards to a treasure vault), the MAC should be slightly longer, but then it makes sense to use a more expensive smart card, instead.
 
 It is usually not necessary to update the MAC when the card is validated. Instead, **compute the MAC only on the issued ticket and exclude the ride counter and other continuously changing data from the MAC input**. For example, the number of remaining rides can be calculated as the difference between the current counter value and an unchanging maximum value. The reasons for not updating the MAC are explained below in the Tearing section.
+
+* Cryptographic authentication between the card and reader
+
+With Ultralight C, the simplest ticket design is to **rely entirely on the built-in shared-key authentication: authenticate the card with a secret key and then read and write ticket information.** The mutual secret-key authentication allows the reader to verify that the ticket is authentic, and it prevents modification of the ticket information such as the expiry date or number of rides without knowing the secret key. Cloning of the ticket to another blank Ultralight C card or to a special clone card is also prevented because the attacker would need to extract the secret key first.
+
+Thus, you should **replace the default key on each card with an application-specific secret key when initially formatting the card.** The secret key needs to be stored on the reader or a backend cloud server. Also, you should remember to **set the AUTH1 parameter on the card because, by default, all the memory pages can be written without authentication.**
 
 ## Issue Ticket
 * we authenticate the card using the default authentication key
@@ -179,3 +195,6 @@ It is usually not necessary to update the MAC when the card is validated. Instea
   *   Clear expiration date and number of rides.
   *   Issue tickets with constant number of rides (5)
   *   Issue MAC over UID.
+
+## Validate Ticket
+* 
