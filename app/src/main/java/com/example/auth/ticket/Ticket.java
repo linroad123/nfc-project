@@ -34,6 +34,8 @@ public class Ticket {
     private final byte[] TAG = "ABCD".getBytes();
     private final byte[] VERSION = {(byte)777, (byte)0, (byte)0, (byte)0};
     private final boolean DEFAULT_KEY = false;
+    private final byte[] MAX_RIDE = {(byte)5, (byte)0,(byte)0,(byte)0 };
+    private final int max_ride = 5;
 
     /** Create a new ticket */
     public Ticket() throws GeneralSecurityException {
@@ -83,6 +85,8 @@ public class Ticket {
 
     // Mac generate
     private  byte[] calculateMac(){
+        // set max_ride on OTP
+        boolean setmaxride = utils.writePages(MAX_RIDE, 0, 3,1);
         byte[] data = new byte[12];
         boolean resRead = utils.readPages(0, 3, data, 0);
         if(resRead){
@@ -166,7 +170,7 @@ public class Ticket {
     }
 
     // Require authentication on all writable pages.
-    private  final byte[] AUTH0 = {(byte)4, (byte)0,(byte)0,(byte)0 };
+    private  final byte[] AUTH0 = {(byte)3, (byte)0,(byte)0,(byte)0 };
     // Neither allow read nor write operations without authentication.
     private  final byte[] AUTH1 = {(byte)0, (byte)0,(byte)0,(byte)0 };
     private void issueAUTH(){
@@ -184,14 +188,81 @@ public class Ticket {
     // Issue tickets with constant number of rides (5)
     private int issueNoR(){
         int counter = readCounter();
-        counter = counter + 5;
+        counter = counter + max_ride;
 
         byte[] noR = intToByte(counter);
         utils.writePages(noR, 0, 7, 1);
         return counter;
     }
+    // extend the number of ride to 5
+    private int extendNoR(){
+        remainingUses = readRemainUses();
+        remainingUses = remainingUses + 5;
 
+        byte[] noR = intToByte(remainingUses);
+        utils.writePages(noR, 0, 7, 1);
+        return remainingUses;
+    }
 
+    private byte[] getDate(){
+        byte[] date = new byte[4];
+        utils.readPages(6,1,date,0);
+        return date;
+    }
+
+    private  boolean checkExpiryDate(byte[] dateInCard){
+        Date date = new Date(); 
+        Calendar cal = Calendar.getInstance();
+        cal.setTime(date);
+
+        int year = cal.get(Calendar.YEAR);
+        int month = cal.get(Calendar.MONTH);
+        int day = cal.get(Calendar.DAY_OF_MONTH);
+        byte[] now = {(byte)(year - 2000), (byte)(month + 1), (byte)day, (byte)0};
+        return !compareArraySmallerOrEqual(now, dateInCard); //true if expired
+
+    }
+
+    private boolean checkSafeLimits(byte[] expiryDate, int remainingUses){
+        Date date = new Date();
+        Calendar cal = Calendar.getInstance();
+  
+        cal.setTime(date);
+        int year = (int)expiryDate[0] + 2000;
+        int month = (int)expiryDate[1] - 1;
+        int day = (int)expiryDate[2];
+        Calendar nowCal = Calendar.getInstance();
+        nowCal.clear();
+        nowCal.set(Calendar.YEAR, year);
+        nowCal.set(Calendar.MONTH, month);
+        nowCal.set(Calendar.DAY_OF_MONTH, day);
+        Date expiry = nowCal.getTime();
+        long diff = expiry.getTime()  - date.getTime();
+        long d = TimeUnit.DAYS.convert(diff, TimeUnit.MILLISECONDS);
+        if (d > 2)
+            return false;
+  
+        int counter = readCounter();
+        if (remainingUses - counter > 5){
+            return false;
+        }
+        return true;
+        //true is safe
+  
+      }
+
+    private  boolean compareArraySmallerOrEqual(byte[] a1, byte[] a2){
+        try {
+            for (int i = 0; i < a1.length; i++){
+                if (a1[i] > a2[i])
+                    return false;
+            }
+        }
+        catch (ArrayIndexOutOfBoundsException e){
+            e.printStackTrace();
+        }
+            return true;
+    }
     
 
     private int byteToInt(byte[] b) {
@@ -220,6 +291,19 @@ public class Ticket {
 
         // Authenticate fail
         res = utils.authenticate(authenticationKey);
+                // first time format the card
+        if (res) {
+            issueKey();
+            authenNewKey();
+            issueTagVersion();
+            resetDateNoR();
+            remainingUses = issueNoR();
+            issueMAC();
+            issueAUTH();
+            infoToShow = "First time format this card";
+            return true;
+        } 
+
         if (!res) {
             Utilities.log("Authentication failed in issue()", true);
             infoToShow = "Authentication failed";
@@ -233,6 +317,18 @@ public class Ticket {
 
         byte[] mac = calculateMac();
         if (!checkMAC(mac)) {
+            infoToShow = "Data is modified, this card is cracked.";
+            return false;
+        }
+
+        // check if the card is expired
+        byte[] expiryDateFromCard = getDate();
+        byte[] zero = {(byte)0,(byte)0,(byte)0,(byte)0 };
+        if (compareArray(expiryDateFromCard,zero)){
+            extendNoR();
+            infoToShow = "You haven't use the card for the first time. Add 5 more time to play ";
+            return true;
+        }else if (checkExpiryDate(expiryDateFromCard)) { 
             issueKey();
             authenNewKey();
             issueTagVersion();
@@ -240,32 +336,26 @@ public class Ticket {
             remainingUses = issueNoR();
             issueMAC();
             issueAUTH();
-            infoToShow = "Data is modified, this card is being resetting now";
+            infoToShow = "The expiry date is over, this card is being resetting now";
             return true;
         }
 
-        // Example of writing:
-        byte[] message = "info".getBytes();
-        res = utils.writePages(message, 0, 6, 1);
-
-        // first time format the card
-        if (res) {
-            issueKey();
-            authenNewKey();
-            issueTagVersion();
-            resetDateNoR();
-            remainingUses = issueNoR();
-            issueMAC();
-            issueAUTH();
-            infoToShow = "First time format this card";
-            return true;
-        } 
-
-
+        int remainUses = readRemainUses();
+        if (!checkSafeLimits(expiryDateFromCard, remainingUses)){
+            infoToShow="We detect the suspicious activities in your card. We will detain your card.";
+            return false;
+        }
+    
 
         return true;
     }
 
+
+    private int readRemainUses(){
+        byte[] res = new byte[4];
+        utils.readPages(7, 1, res, 0);
+        return bytesToInt(res);
+    }
     /**
      * Use ticket once
      *
